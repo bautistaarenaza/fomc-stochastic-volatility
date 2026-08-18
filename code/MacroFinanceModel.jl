@@ -55,7 +55,7 @@ function run_particle_filter(params::ModelParams, data::DataFrame, N_particles::
   dt_data = Vector{Float64}(data.dt)
   is_fomc_data = Vector{Bool}(data.is_fomc)
 
-  # Trackers for the Jitter's look-back requirement
+  # Trackers for the jitter step's look-back requirement
   y_prev = 0.0
   shock_prev = 0.0
   dt_prev = dt_data[1]
@@ -77,7 +77,7 @@ function run_particle_filter(params::ModelParams, data::DataFrame, N_particles::
     Threads.@threads for i in 1:N_particles
       x_safe = clamp(x_prev[i], -20.0, 20.0)
       v_eval = exp(x_safe)
-      drift_penalty = 0.5 * (v_eval / 100.0)
+      drift_penalty = 0.5 * (v_eval / 100.0)      # v_eval/100 because returns are in %s
 
       continuous_mean = (params.μ - drift_penalty) * dt
       continuous_var = v_eval * dt
@@ -116,13 +116,15 @@ function run_particle_filter(params::ModelParams, data::DataFrame, N_particles::
     x_prev_prev_resampled = x_prev_prev[indices]
 
     # -------------------------------------------------------------------
-    # FULL POSTERIOR JITTER (WITH LEVERAGE & LOOK-BACK FIX)
+    # Full-posterior jitter step, incorporating the leverage effect
     # -------------------------------------------------------------------
     if ess_t < (N_particles / 2.0)
       emp_std = std(x_resampled)
       sigma_jitter = max(emp_std * 0.20, 0.05)
 
       Threads.@threads for i in 1:N_particles
+        # target density of each particle:
+        # p(x_{t-1} | x_{t-2}, y_{1:t}) ∝ p(x_{t-1} | x_{t-2}, y_{t-1}) p(y_t | x_{t-1})
         x_curr = x_resampled[i]
         x_prop = x_curr + randn() * sigma_jitter
         prev_state = x_prev_prev_resampled[i]
@@ -162,7 +164,7 @@ function run_particle_filter(params::ModelParams, data::DataFrame, N_particles::
         log_trans_prop = log_2pi_half - log(transition_std) - 0.5 * ((x_prop - expected_mean) / transition_std)^2
         log_trans_curr = log_2pi_half - log(transition_std) - 0.5 * ((x_curr - expected_mean) / transition_std)^2
 
-        # Observation density evaluation relies on y_t (which is correct)
+        # Observation density evaluation relies on y_t
         v_prop = exp(x_prop)
         cont_mean_prop = (params.μ - 0.5 * (v_prop / 100.0)) * dt
         cont_var_prop = v_prop * dt
@@ -235,7 +237,7 @@ function run_particle_filter(params::ModelParams, data::DataFrame, N_particles::
     x_prev_prev .= x_prev
     x_prev .= x_next
 
-    # Store variables for the next step's Jitter look-back
+    # Store variables for the next step's jitter look-back
     y_prev = y_t
     shock_prev = shock
     dt_prev = dt
@@ -254,4 +256,4 @@ function run_particle_filter(params::ModelParams, data::DataFrame, N_particles::
   return log_likelihood
 end
 
-end # End of module
+end # module MacroFinanceModel
