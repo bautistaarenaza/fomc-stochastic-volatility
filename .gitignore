@@ -2,8 +2,11 @@
 SPY/
 IWM/
 SHY/
-data/
+data/*
 *.csv
+
+# But keep the FOMC surprise input series
+!data/fomc_surprises_jk.csv
 
 # PMCMC output
 mcmc_chains/
