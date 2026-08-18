@@ -1,0 +1,14 @@
+# Data (regenerable from Alpaca / too large for git)
+SPY/
+IWM/
+SHY/
+data/
+*.csv
+
+# PMCMC output
+mcmc_chains/
+
+# Julia
+*.jl.cov
+*.jl.mem
+.DS_Store
