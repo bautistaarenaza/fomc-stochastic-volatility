@@ -21,7 +21,7 @@ symbol = "SPY"
 # 1. LOAD DATA
 # ==========================================
 println("Loading data for $symbol...")
-filename = "../data/$symbol/$(symbol)_30m.csv"
+filename = joinpath(@__DIR__, "..", "data", symbol, "$(symbol)_30m.csv")
 
 master_data = CSV.read(filename, DataFrame)
 
@@ -42,17 +42,18 @@ println("Dataset loaded: $(nrow(master_data)) rows.")
 # 2. DEFINE THE LOG-PRIOR
 # ==========================================
 function generate_asset_prior(master_data::DataFrame)
-  println("Generating data-driven prior for new asset...")
+  println("Generating data-driven prior from the sample...")
 
   clean_bars = filter(row -> !row.is_fomc, master_data)
   fomc_bars = filter(row -> row.is_fomc, master_data)
 
   # DYNAMIC ANNUALIZATION
-  # Como 'dt' ya es la fracción de año por ventana, su inversa es el número exacto de ventanas por año.
+  # Since 'dt' is already the fraction of a year spanned by each window,
+  # its inverse is the exact number of windows per year.
   median_dt = median(clean_bars.dt)
   ann_factor = 1.0 / median_dt
 
-  # Solo para métricas en pantalla
+  # Reported metrics only; not used in the calculations below
   median_dt_mins = median(clean_bars.dt_minutes)
   implied_bars_per_day = ann_factor / 252.0
 
@@ -85,7 +86,7 @@ function generate_asset_prior(master_data::DataFrame)
   return function dynamic_log_prior(θ_array)
     κ, θ, σ_v, μ, α_0, α_1, β_0, β_1, σ_ε, ρ = θ_array
 
-    # Bound safety checks including the new correlation parameter
+    # Support checks, including the bounds on the correlation parameter
     if κ <= 0.0 || σ_v <= 0.0 || σ_ε <= 0.0 || ρ <= -0.99 || ρ >= 0.99
       return -Inf
     end
@@ -96,7 +97,7 @@ function generate_asset_prior(master_data::DataFrame)
     lp += logpdf(LogNormal(2.0, 1.0), σ_v)
     lp += logpdf(InverseGamma(2.0, est_sigma_eps * 3.0), σ_ε)
 
-    # Prior for Leverage Effect: Centered around -0.5, allowing broad exploration
+    # Prior for the leverage effect: centered at -0.5, wide enough for broad exploration
     lp += logpdf(Normal(-0.5, 0.5), ρ)
 
     lp += logpdf(Normal(est_theta, 3.0), θ)
@@ -113,7 +114,7 @@ function generate_asset_prior(master_data::DataFrame)
 end
 
 # ==========================================
-# 3. PMCMC SETUP (Wrapped in a function)
+# 3. PMCMC SAMPLER
 # ==========================================
 function run_sampler(master_data::DataFrame, symbol::String)
   N_particles = 2^14
@@ -128,10 +129,12 @@ function run_sampler(master_data::DataFrame, symbol::String)
     [73.9841, 5.0131, 11.1485, 2.2969, 1.2881, 0.7779, 0.0849, -2.2967, 0.6064, -0.2464]
   elseif symbol == "SHY"
     [76.722, -0.516, 13.578, 0.055, 0.972, 2.242, -0.011, -0.451, 0.085, 0.005]
+  else
+    error("No base coordinates defined for symbol '$symbol'.")
   end
   param_names = ["kappa", "theta", "sigma_v", "mu", "alpha_0", "alpha_1", "beta_0", "beta_1", "sigma_eps", "rho"]
 
-  out_dir = "mcmc_chains/$symbol"
+  out_dir = "../mcmc_chains/$symbol"
   mkpath(out_dir)
   checkpoint_file = "$out_dir/checkpoint_N$(N_particles).csv"
 
@@ -149,7 +152,7 @@ function run_sampler(master_data::DataFrame, symbol::String)
   log_prior = generate_asset_prior(master_data)
 
   # ---------------------------------------------------------
-  # THE RESUME LOGIC
+  # CHECKPOINT RESUME
   # ---------------------------------------------------------
   start_iter = 1
 
@@ -183,7 +186,7 @@ function run_sampler(master_data::DataFrame, symbol::String)
     println("\n[PMCMC] Initializing Fresh Sampler for $symbol...")
     println("Base Coordinates: ", round.(base_θ, digits=3))
 
-    # --- INJECT NOISE HERE ---
+    # --- OVERDISPERSED STARTING POINT ---
     noise_fraction = 0.05 # 5% relative noise
     valid_start = false
     current_θ = copy(base_θ)
@@ -195,7 +198,7 @@ function run_sampler(master_data::DataFrame, symbol::String)
       proposed_prior = log_prior(proposed_noisy_θ)
 
       if proposed_prior > -Inf
-        # It passed the prior bounds, now test if the filter survives it
+        # Inside the prior support; check that the filter also returns a finite likelihood
         p_struct = ModelParams(proposed_noisy_θ...)
         proposed_ll = run_particle_filter(p_struct, master_data, N_particles)
 
@@ -221,6 +224,8 @@ function run_sampler(master_data::DataFrame, symbol::String)
 
   for i in start_iter:M_iterations
 
+    # Adaptive proposal covariance: diagonal-only while the chain is short,
+    # full empirical covariance once enough history has accumulated.
     if i > 1000
       start_idx = max(1, i - 1000)
       empirical_cov = cov(chain[start_idx:(i-1), :])
@@ -233,8 +238,9 @@ function run_sampler(master_data::DataFrame, symbol::String)
       prop_cov = global_scale * mixed_cov
     end
 
-    jitter = 1e-6 * I
-    L_matrix = cholesky(Symmetric(prop_cov + jitter)).L
+    # Nugget added to keep the Cholesky factorization numerically stable
+    nugget = 1e-6 * I
+    L_matrix = cholesky(Symmetric(prop_cov + nugget)).L
     proposed_θ = current_θ .+ L_matrix * randn(d)
 
     proposed_prior = log_prior(proposed_θ)
@@ -263,7 +269,7 @@ function run_sampler(master_data::DataFrame, symbol::String)
     log_posterior_trace[i] = current_posterior
 
     # ---------------------------------------------------------
-    # THE CHECKPOINT SAVER
+    # CHECKPOINT SAVER
     # ---------------------------------------------------------
     if i % 250 == 0
       elapsed_secs = time() - start_time
@@ -271,12 +277,13 @@ function run_sampler(master_data::DataFrame, symbol::String)
       e_secs = round(Int, elapsed_secs % 60)
       time_str = "$(e_mins)m $(e_secs)s"
 
-      # Calculate Argentina Time (UTC-3)
+      # Argentina local time (UTC-3)
       arg_time_str = Dates.format(Dates.now(Dates.UTC) - Dates.Hour(3), "yyyy-mm-dd HH:MM:SS")
 
       if i <= burn_in
         local_acc_rate = local_accepted / 250.0
 
+        # Scale adaptation: nudge the global step size toward a 10-20% acceptance rate
         if local_acc_rate < 0.10
           global_scale *= 0.90
         elseif local_acc_rate > 0.20
@@ -321,6 +328,7 @@ function run_sampler(master_data::DataFrame, symbol::String)
 
   display(results_df)
 
+  # Avoid overwriting chains from earlier runs with the same configuration
   file_idx = 1
   base_filename = "$out_dir/chain_N$(N_particles)_L$(valid_chain_length)"
   final_filename = "$(base_filename)_$(file_idx).csv"
@@ -345,7 +353,7 @@ function run_sampler(master_data::DataFrame, symbol::String)
 end
 
 # ==========================================
-# EXECUTE THE FUNCTION
+# 4. EXECUTION
 # ==========================================
 run_sampler(master_data, symbol)
 
