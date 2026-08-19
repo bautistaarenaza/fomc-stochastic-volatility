@@ -1,3 +1,6 @@
+# ==========================================
+# rank_norm_gelman_rubin.jl
+# ==========================================
 using CSV
 using DataFrames
 using Statistics
@@ -6,20 +9,27 @@ using Distributions  # inverse normal CDF (quantile of Normal) for the Blom tran
 using Printf
 
 # ==========================================
+# --- MAIN CONFIGURATION ---
+# ==========================================
+symbol = "SPY"
+
+# ==========================================
 # 1. FIND AND LOAD ALL CHAIN FILES
 # ==========================================
 println("Scanning directory for chain files...")
 
-symbol = "SPY"
-
 # Find all files starting with "chain_" and ending with ".csv"
 chains_dir = "../mcmc_chains/" * symbol * "/"
+
+if !isdir(chains_dir)
+  error("Directory $chains_dir does not exist. Run run_pmcmc.jl first.")
+end
+
 all_files = readdir(chains_dir)
 chain_files = filter(f -> startswith(f, "chain_") && endswith(f, ".csv"), all_files)
 
 if isempty(chain_files)
-  println("ERROR: No chain files found in the current directory.")
-  exit()
+  error("No chain files found in $chains_dir. Run run_pmcmc.jl first.")
 end
 
 println("Found $(length(chain_files)) chain files:")
@@ -34,7 +44,7 @@ end
 num_chains = length(chains)
 param_names = names(chains[1])
 
-# --- MODIFICACIÓN 3: Mover log_posterior al principio ---
+# Report log_posterior first, ahead of the individual model parameters
 if "log_posterior" in param_names
   param_names = filter(x -> x != "log_posterior", param_names)
   pushfirst!(param_names, "log_posterior")
@@ -43,11 +53,23 @@ end
 num_params = length(param_names)
 chain_length = nrow(chains[1])
 
+# The global diagnostic stacks the chains into one matrix, so they must all be
+# the same length and a single chain leaves the between-chain variance undefined
+if any(nrow(df) != chain_length for df in chains)
+  error("Chain files have differing lengths: $(nrow.(chains)). The global R̂ requires equal-length chains.")
+end
+
+if num_chains < 2
+  error("Only one chain found. The global R̂ requires at least two independent chains.")
+end
+
+println("\nLoaded $num_chains chains of $chain_length draws across $num_params quantities.")
+
 # ==========================================
 # 2. RANK-NORMALIZED GELMAN-RUBIN R-HAT
 # ==========================================
 
-# Classical R-hat math. This is now used only as an inner building block:
+# Classical R-hat math. This is used only as an inner building block:
 # it is applied to *rank-normalized* draws rather than to the raw draws.
 function rhat_core(psi::AbstractMatrix)
   n, m = size(psi)
@@ -111,7 +133,9 @@ function calculate_global_rhat(chains_data::Vector{DataFrame}, param::String)
   return rhat_rank_normalized(psi)
 end
 
-# Split rank-normalized R-hat for a single chain
+# Split rank-normalized R-hat for a single chain. Comparing a chain's two
+# halves against each other detects drift that a between-chain comparison
+# alone would miss.
 function calculate_split_rhat(df::DataFrame, param::String)
   vals = df[!, param]
   n_total = length(vals)
@@ -123,10 +147,14 @@ function calculate_split_rhat(df::DataFrame, param::String)
   return rhat_rank_normalized(psi)
 end
 
+# ==========================================
+# 3. REPORT
+# ==========================================
 println("\n--- RANK-NORMALIZED GELMAN-RUBIN DIAGNOSTICS (R̂) ---")
 println("(Rank-normalized & folded; values < 1.01 indicate convergence)")
 
-# Construct dynamic header avoiding soft scope issues
+# Build the header dynamically, keeping the interpolated pieces out of the
+# loop body to avoid soft-scope issues at top level
 header_base = @sprintf("%-15s | %-8s", "Parameter", "Global R̂")
 header_splits = join([@sprintf(" | Split R̂ (C%d)", i) for i in 1:num_chains], "")
 full_header = header_base * header_splits
