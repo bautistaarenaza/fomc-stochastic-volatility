@@ -1,5 +1,5 @@
 # ==========================================
-# test_pit_vals_all.jl
+# test_pit_vals.jl
 # ==========================================
 using CSV
 using DataFrames
@@ -13,16 +13,18 @@ using LaTeXStrings
 using Measures
 
 # ==========================================
-# --- CONFIGURACIÓN PRINCIPAL ---
+# --- MAIN CONFIGURATION ---
 # ==========================================
 symbols = ["SPY", "IWM"]
 
-# Contenedores para almacenar los subpaneles
+# Containers for the per-symbol subpanels
 subplots_acf = []
 subplots_acf_sq = []
 subplots_cdf = []
 
-# Configuración base de fuente
+# Global plot defaults. These must be set before any plot object is built,
+# since Plots.jl resolves attributes at creation time.
+default(grid=false, framestyle=:axes, dpi=300)
 scalefontsizes(1.2)
 
 for (idx, symbol) in enumerate(symbols)
@@ -36,7 +38,7 @@ for (idx, symbol) in enumerate(symbols)
   end
 
   println("\n==================================================")
-  println("Procesando datos para $symbol...")
+  println("Processing data for $symbol...")
   println("==================================================")
 
   pit_df = CSV.read(input_file, DataFrame)
@@ -63,8 +65,12 @@ for (idx, symbol) in enumerate(symbols)
   # ==========================================
   # 3. DGT INDEPENDENCE TESTING (Ljung-Box)
   # ==========================================
+  # Diebold-Gunther-Tay: map the PITs through the inverse normal CDF and test
+  # the resulting z-scores for serial correlation. Levels probe the mean
+  # equation, squares probe the variance equation.
   println("\nRunning Diebold-Gunther-Tay Independence Tests...")
 
+  # Clamp away from the open endpoints so the inverse CDF stays finite
   safe_pits = clamp.(marginal_pit_sequence, 1e-7, 1.0 - 1e-7)
   z_residuals = quantile.(Normal(0, 1), safe_pits)
   z_squared = z_residuals .^ 2
@@ -81,39 +87,41 @@ for (idx, symbol) in enumerate(symbols)
   println("  Squares (Var Eq) P-Value:   $(round(pval_squares, digits=6))")
 
   # ==========================================
-  # 4. PREPARAR CONFIGURACIÓN VISUAL
+  # 4. VISUAL CONFIGURATION
   # ==========================================
   lags_to_plot = 20
   acf_values = autocor(z_residuals, 1:lags_to_plot)
   acf_values_sq = autocor(z_squared, 1:lags_to_plot)
   conf_bound = 1.96 / sqrt(T_data)
 
-  # Ajuste fino de márgenes y leyendas
+  # Only the left-hand panel carries the y-label and the legend
   show_legend = idx == 1 ? true : false
-  y_label_acf = idx == 1 ? "Autocorrelación" : ""
-  y_label_cdf = idx == 1 ? "Probabilidad Acumulada" : "" # Actualizado para la CDF
+  y_label_acf = idx == 1 ? "Autocorrelation" : ""
+  y_label_cdf = idx == 1 ? "Cumulative Probability" : ""
 
-  margen_izq = idx == 1 ? 6Plots.mm : 2Plots.mm
-  margen_der = idx == 1 ? 0Plots.mm : 4Plots.mm
+  margin_left = idx == 1 ? 6Plots.mm : 2Plots.mm
+  margin_right = idx == 1 ? 0Plots.mm : 4Plots.mm
 
   # ==========================================
-  # 5. CREAR SUBPANELES ACF (NIVELES)
+  # 5. ACF SUBPANELS (LEVELS)
   # ==========================================
   p_acf = bar(1:lags_to_plot, acf_values,
     title=symbol,
-    xlabel="Lag (intervalos de 30 min)",
+    xlabel="Lag (30-minute intervals)",
     ylabel=y_label_acf,
-    label=show_legend ? "Residuos" : "",
+    label=show_legend ? "Residuals" : "",
     color=:mediumseagreen, linecolor=:darkgreen,
     alpha=0.7, bar_width=0.6,
     legend=show_legend ? :topright : :none,
-    left_margin=margen_izq, right_margin=margen_der,
+    left_margin=margin_left, right_margin=margin_right,
     bottom_margin=6Plots.mm
   )
-  hline!(p_acf, [conf_bound], color=:black, linestyle=:dot, lw=2.5, label=show_legend ? "Confianza (95%)" : "")
+  hline!(p_acf, [conf_bound], color=:black, linestyle=:dot, lw=2.5, label=show_legend ? "95% confidence band" : "")
   hline!(p_acf, [-conf_bound], color=:black, linestyle=:dot, lw=2.5, label="")
   hline!(p_acf, [0.0], color=:black, lw=1, label="")
 
+  # Scale the y-axis so the confidence band is always visible, even when the
+  # autocorrelations themselves are tiny
   max_acf = maximum(abs.(acf_values))
   y_lim_dynamic = max(conf_bound * 2.0, max_acf * 1.2)
   ylims!(p_acf, (-y_lim_dynamic, y_lim_dynamic))
@@ -121,20 +129,20 @@ for (idx, symbol) in enumerate(symbols)
   push!(subplots_acf, p_acf)
 
   # ==========================================
-  # 6. CREAR SUBPANELES ACF (CUADRADOS)
+  # 6. ACF SUBPANELS (SQUARES)
   # ==========================================
   p_acf_sq = bar(1:lags_to_plot, acf_values_sq,
     title=symbol,
-    xlabel="Lag (intervalos de 30 min)",
+    xlabel="Lag (30-minute intervals)",
     ylabel=y_label_acf,
-    label=show_legend ? "Residuos al cuadrado" : "",
+    label=show_legend ? "Squared residuals" : "",
     color=:orange2, linecolor=:darkorange2,
     alpha=0.7, bar_width=0.6,
     legend=show_legend ? :topright : :none,
-    left_margin=margen_izq, right_margin=margen_der,
+    left_margin=margin_left, right_margin=margin_right,
     bottom_margin=6Plots.mm
   )
-  hline!(p_acf_sq, [conf_bound], color=:black, linestyle=:dot, lw=2.5, label=show_legend ? "Confianza (95%)" : "")
+  hline!(p_acf_sq, [conf_bound], color=:black, linestyle=:dot, lw=2.5, label=show_legend ? "95% confidence band" : "")
   hline!(p_acf_sq, [-conf_bound], color=:black, linestyle=:dot, lw=2.5, label="")
   hline!(p_acf_sq, [0.0], color=:black, lw=1, label="")
 
@@ -145,9 +153,9 @@ for (idx, symbol) in enumerate(symbols)
   push!(subplots_acf_sq, p_acf_sq)
 
   # ==========================================
-  # 7. CREAR SUBPANELES CDF PIT
+  # 7. PIT CDF SUBPANELS
   # ==========================================
-  # Calcular la distribución empírica acumulada
+  # Empirical CDF of the PIT sequence, compared against the U(0,1) diagonal
   sorted_pits = sort(marginal_pit_sequence)
   empirical_cdf = (1:T_data) ./ T_data
 
@@ -157,16 +165,16 @@ for (idx, symbol) in enumerate(symbols)
     ylabel=y_label_cdf,
     color=:orangered3,
     linewidth=2,
-    label=show_legend ? L"\hat{F}_U(u_t)" * " empírica" : "",
-    legend=show_legend ? :topleft : :none, # Ubicado arriba a la izquierda para no pisar la curva
-    left_margin=margen_izq, right_margin=margen_der,
+    label=show_legend ? L"\hat{F}_U(u_t)" * " empirical" : "",
+    legend=show_legend ? :topleft : :none, # Top-left keeps the legend clear of the curve
+    left_margin=margin_left, right_margin=margin_right,
     bottom_margin=5Plots.mm
   )
 
-  # Añadir la CDF teórica de una Uniforme(0,1) que es y = x
+  # Theoretical CDF of a Uniform(0,1), i.e. the line y = x
   plot!(p_cdf, [0.0, 1.0], [0.0, 1.0],
     color=:black, alpha=0.5, ls=:dot, lw=2,
-    label=show_legend ? L"F_U(u_t)" * " teórica " * L"\mathcal{U}(0,1)" : "")
+    label=show_legend ? L"F_U(u_t)" * " theoretical " * L"\mathcal{U}(0,1)" : "")
 
   ylims!(p_cdf, (0.0, 1.0))
   xlims!(p_cdf, (0.0, 1.0))
@@ -174,22 +182,28 @@ for (idx, symbol) in enumerate(symbols)
 end
 
 # ==========================================
-# 8. COMBINAR Y GUARDAR LOS GRÁFICOS
+# 8. COMBINE AND SAVE THE FIGURES
 # ==========================================
-println("\nGenerando gráficos combinados...")
+println("\nGenerating combined figures...")
 
-# Desactivar la grilla por defecto para los gráficos finales
-default(grid=false, framestyle=:axes, dpi=300)
+mkpath("../figs")
 
-final_acf = plot(subplots_acf..., layout=(1, 2), size=(1000, 350))
+n_panels = length(subplots_acf)
+if n_panels == 0
+  error("No PIT sequences were loaded. Run compute_pit_vals.jl first.")
+end
+
+final_acf = plot(subplots_acf..., layout=(1, n_panels), size=(500 * n_panels, 350))
 savefig(final_acf, "../figs/combined_acf_res.pdf")
 
-final_acf_sq = plot(subplots_acf_sq..., layout=(1, 2), size=(1000, 350))
+final_acf_sq = plot(subplots_acf_sq..., layout=(1, n_panels), size=(500 * n_panels, 350))
 savefig(final_acf_sq, "../figs/combined_acf_res2.pdf")
 
-# Ahora guardamos el gráfico combinado de las CDF
-final_cdf = plot(subplots_cdf..., layout=(1, 2), size=(1000, 300))
+final_cdf = plot(subplots_cdf..., layout=(1, n_panels), size=(500 * n_panels, 300))
 savefig(final_cdf, "../figs/combined_pit_cdf.pdf")
 
-println("¡Éxito! Gráficos guardados en el directorio '../figs/' con prefijo 'combined_'.")
+# scalefontsizes is cumulative within a session; reset so repeated runs in the
+# same REPL do not keep enlarging the fonts
+Plots.resetfontsizes()
 
+println("Done. Figures saved to '../figs/' with the 'combined_' prefix.")

@@ -6,11 +6,12 @@ using .MacroFinanceModel
 
 using CSV
 using DataFrames
+using Dates
 using Statistics
 using SpecialFunctions
 
 # ==========================================
-# --- CONFIGURACIÓN PRINCIPAL ---
+# --- MAIN CONFIGURATION ---
 # ==========================================
 symbol = "SPY"
 
@@ -20,8 +21,11 @@ function normcdf(μ, σ, x)
 end
 
 # ==========================================
-# 1. THE SPECIALIZED PIT PARTICLE FILTER
+# 1. PIT PARTICLE FILTER
 # ==========================================
+# Mirrors the filter in MacroFinanceModel.jl, but returns the sequence of
+# probability integral transforms u_t = F(y_t | y_{1:t-1}, Θ) instead of the
+# log-likelihood. Under correct specification the u_t are i.i.d. U(0,1).
 function systematic_resample(weights::Vector{Float64}, N::Int)
   indices = zeros(Int, N)
   u_1 = rand() / N
@@ -58,7 +62,7 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
   inv_sqrt_2pi = 1.0 / sqrt(2π)
   log_2pi_half = -0.5 * log(2π)
 
-  # Trackers for the Jitter's look-back requirement
+  # Trackers for the jitter step's look-back requirement
   y_prev = 0.0
   shock_prev = 0.0
   dt_prev = dt_data[1]
@@ -70,6 +74,9 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
     dt = dt_data[t]
     is_fomc = is_fomc_data[t]
 
+    # -------------------------------------------------------------------
+    # Evaluates both the CDF and the density of y_t under each particle
+    # -------------------------------------------------------------------
     Threads.@threads for i in 1:N_particles
       x_safe = clamp(x_prev[i], -20.0, 20.0)
       v_eval = exp(x_safe)
@@ -91,12 +98,19 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
       end
     end
 
+    # The predictive CDF is the particle average of the per-particle CDFs,
+    # since the x_prev swarm is equally weighted at this point.
     pit_values[t] = mean(cdf_vals)
 
+    # -------------------------------------------------------------------
+    # Resamples particles according to the p(y_t | x_{t-1}) weights
+    # -------------------------------------------------------------------
     mean_weight = mean(weights)
     if mean_weight > 0 && !isnan(mean_weight)
       weights .= weights ./ sum(weights)
     else
+      # Degenerate step: fall back to uniform weights so the PIT sequence
+      # can still be completed for this posterior draw
       weights .= 1.0 / N_particles
     end
 
@@ -107,7 +121,7 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
     x_prev_prev_resampled = x_prev_prev[indices]
 
     # -------------------------------------------------------------------
-    # FULL POSTERIOR JITTER (WITH LEVERAGE & LOOK-BACK FIX)
+    # Full-posterior jitter step, incorporating the leverage effect
     # -------------------------------------------------------------------
     if ess_t < (N_particles / 2.0)
       emp_std = std(x_resampled)
@@ -119,6 +133,7 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
         prev_state = x_prev_prev_resampled[i]
 
         if t > 1
+          # Condition the transition on the previously observed y_{t-1}
           v_prev_eval = exp(prev_state)
           drift_pen_prev = 0.5 * (v_prev_eval / 100.0)
           cont_mean_prev = (params.μ - drift_pen_prev) * dt_prev
@@ -142,11 +157,13 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
           expected_mean = prev_state + drift_base + jump_comp + params.σ_v * cond_mean_Wv_prev
           transition_std = params.σ_v * sqrt(max(cond_var_Wv_prev, 0.0))
         else
+          # Fallback for t=1 where y_{t-1} does not exist
           drift_base = params.κ * (params.θ - prev_state) * dt
           expected_mean = prev_state + drift_base
           transition_std = params.σ_v * sqrt(dt)
         end
 
+        # Evaluates p(x_{t-1} | y_{t-1}, x_{t-2})
         log_trans_prop = log_2pi_half - log(transition_std) - 0.5 * ((x_prop - expected_mean) / transition_std)^2
         log_trans_curr = log_2pi_half - log(transition_std) - 0.5 * ((x_curr - expected_mean) / transition_std)^2
 
@@ -158,6 +175,7 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
         cont_mean_curr = (params.μ - 0.5 * (v_curr / 100.0)) * dt
         cont_var_curr = v_curr * dt
 
+        # Evaluates p(y_t | x_{t-1})
         if !is_fomc
           std_prop = sqrt(cont_var_prop)
           std_curr = sqrt(cont_var_curr)
@@ -178,8 +196,10 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
         end
       end
     end
-    # -------------------------------------------------------------------
 
+    # -------------------------------------------------------------------
+    # Propagates particles
+    # -------------------------------------------------------------------
     Threads.@threads for i in 1:N_particles
       x_curr = x_resampled[i]
       v_eval = exp(x_curr)
@@ -187,6 +207,7 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
       drift_penalty = 0.5 * (v_eval / 100.0)
       cont_mean = (params.μ - drift_penalty) * dt
 
+      # Extract the realized observation error (eta)
       if !is_fomc
         obs_var = v_eval * dt
         eta = y_t - cont_mean
@@ -196,10 +217,12 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
         eta = y_t - cont_mean - jump_mean
       end
 
+      # Calculate conditional moments of ΔW_V given the price shock
       cov_Wv_eta = sqrt(v_eval) * params.ρ * dt
       cond_mean_Wv = (cov_Wv_eta / obs_var) * eta
       cond_var_Wv = dt - (cov_Wv_eta^2 / obs_var)
 
+      # Draw correlated noise
       dW_V = cond_mean_Wv + sqrt(max(cond_var_Wv, 0.0)) * randn()
 
       drift_x = params.κ * (params.θ - x_curr) * dt
@@ -216,7 +239,7 @@ function run_particle_filter_pit(params::ModelParams, data::DataFrame, N_particl
     x_prev_prev .= x_prev
     x_prev .= x_next
 
-    # Update trackers for the next step's Jitter look-back
+    # Store variables for the next step's jitter look-back
     y_prev = y_t
     shock_prev = shock
     dt_prev = dt
@@ -233,13 +256,27 @@ println("Loading data for $symbol...")
 filename = "../data/$symbol/$(symbol)_30m.csv"
 master_data = CSV.read(filename, DataFrame)
 
+# The same sample filters applied in run_pmcmc.jl, so the PIT sequence is
+# evaluated on exactly the observations the chains were estimated on.
+filter!(row -> !ismissing(row.adj_log_return) && !isnan(row.adj_log_return), master_data)
+
+if eltype(master_data.ny_time) == String
+  master_data.ny_time = DateTime.(master_data.ny_time, dateformat"yyyy-mm-dd HH:MM:SS")
+end
+
+start_date = DateTime(2016, 1, 1, 0, 0, 0)
+end_date = DateTime(2026, 3, 31, 23, 59, 59)
+
+filter!(row -> start_date <= row.ny_time <= end_date, master_data)
+
+println("Dataset loaded: $(nrow(master_data)) rows.")
+
 chains_dir = "../mcmc_chains/$symbol/"
 all_files = readdir(chains_dir)
 chain_files = chains_dir .* filter(f -> startswith(f, "chain_") && endswith(f, ".csv"), all_files)
 
 if isempty(chain_files)
-  println("ERROR: No chain files found.")
-  exit()
+  error("No chain files found in $chains_dir. Run run_pmcmc.jl first.")
 end
 
 println("Aggregating $(length(chain_files)) chain files...")
@@ -249,8 +286,11 @@ master_chain_df = vcat(chains_array...)
 core_params = ["kappa", "theta", "sigma_v", "mu", "alpha_0", "alpha_1", "beta_0", "beta_1", "sigma_eps", "rho"]
 
 # ==========================================
-# 3. FULL BAYESIAN MARGINALIZATION 
+# 3. FULL BAYESIAN MARGINALIZATION
 # ==========================================
+# Averages the PIT sequence over draws from the posterior, so the resulting
+# u_t integrate out parameter uncertainty rather than conditioning on a
+# single point estimate.
 T_data = nrow(master_data)
 marginal_pit_sequence = zeros(Float64, T_data)
 
@@ -284,7 +324,8 @@ println("Saving PIT values to CSV...")
 mkpath("../pit_vals")
 output_file = "../pit_vals/$(symbol)_pit_sequence.csv"
 
-# Se extrae la columna ny_time directamente del dataset original
+# ny_time is carried over from the source dataset so each PIT value stays
+# aligned with the bar that produced it
 out_df = DataFrame(
   ny_time=master_data.ny_time,
   pit_value=marginal_pit_sequence
