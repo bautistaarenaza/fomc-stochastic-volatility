@@ -1,5 +1,5 @@
 # ==========================================
-# plot_posterior_densities.jl
+# plot_marginal_densities.jl
 # ==========================================
 using CSV
 using DataFrames
@@ -11,7 +11,7 @@ using LaTeXStrings
 using Measures
 
 # ==========================================
-# --- CONFIGURACIÓN PRINCIPAL ---
+# --- MAIN CONFIGURATION ---
 # ==========================================
 symbols = ["SPY", "IWM"]
 
@@ -48,14 +48,18 @@ for sym in symbols
   # Pool all chains for this symbol into a single DataFrame
   pooled_df = vcat(chains...)
 
-  # Compute the new derived quantities based on the analytical properties
-  # Multiply by 252 to convert the half-life from years to trading days
+  # Derived quantities from the analytical properties of the stationary
+  # log-variance process, where x_t ~ N(θ, σ_v² / 2κ).
+
+  # Mean-reversion half-life, converted from years to trading days
   pooled_df.tau_half = (log(2.0) ./ pooled_df.kappa) .* 252.0
 
+  # Lognormal moments of √V = exp(x/2) under the stationary distribution
   pooled_df.E_sqrt_V = exp.((pooled_df.theta ./ 2.0) .+ (pooled_df.sigma_v .^ 2 ./ (16.0 .* pooled_df.kappa)))
   pooled_df.Std_sqrt_V = pooled_df.E_sqrt_V .* sqrt.(exp.(pooled_df.sigma_v .^ 2 ./ (8.0 .* pooled_df.kappa)) .- 1.0)
 
-  # Compute percentage increments for volatility jumps
+  # FOMC jumps expressed as percentage changes in volatility rather than in
+  # log-variance. α_1 is scaled by 0.25 to report the effect of a 25 bp surprise.
   pooled_df.inc_alpha_0 = 100.0 .* (exp.(pooled_df.alpha_0 ./ 2.0) .- 1.0)
   pooled_df.inc_alpha_1 = 100.0 .* (exp.(pooled_df.alpha_1 .* 0.25 ./ 2.0) .- 1.0)
 
@@ -63,8 +67,7 @@ for sym in symbols
 end
 
 if isempty(symbols_data)
-  println("ERROR: No valid data loaded for any symbol.")
-  exit()
+  error("No valid data loaded for any symbol. Run run_pmcmc.jl first.")
 end
 
 # ==========================================
@@ -74,21 +77,23 @@ cont_params = ["mu", "tau_half", "E_sqrt_V", "Std_sqrt_V", "rho"]
 jump_params = ["beta_0", "beta_1", "sigma_eps", "inc_alpha_0", "inc_alpha_1"]
 
 latex_names = Dict(
-  "mu" => L"$\mu \quad [\%/\mathrm{año}]$",
-  "tau_half" => L"$\tau_{1/2} \quad [\mathrm{días}]$",
-  "E_sqrt_V" => L"$\mathrm{E}\left[\sqrt{V_t}\right] \quad [\%/\mathrm{año}]$",
-  "Std_sqrt_V" => L"$\mathrm{Std}\left[\sqrt{V_t}\right] \quad [\%/\mathrm{año}]$",
+  "mu" => L"$\mu \quad [\%/\mathrm{yr}]$",
+  "tau_half" => L"$\tau_{1/2} \quad [\mathrm{days}]$",
+  "E_sqrt_V" => L"$\mathrm{E}\left[\sqrt{V_t}\right] \quad [\%/\mathrm{yr}]$",
+  "Std_sqrt_V" => L"$\mathrm{Std}\left[\sqrt{V_t}\right] \quad [\%/\mathrm{yr}]$",
   "rho" => L"$\rho$",
   "beta_0" => L"$\beta_0 \quad [\mathrm{p.p.}]$",
   "beta_1" => L"$\beta_1 \quad [\mathrm{p.p.}/\mathrm{p.p.}]$",
   "sigma_eps" => L"$\sigma_\epsilon \quad [\mathrm{p.p.}]$",
-  "inc_alpha_0" => L"$\mathrm{Incremento} \ \mathrm{base} \ \mathrm{en} \ \sqrt{V_t} \quad [\%]$",
-  "inc_alpha_1" => L"$\mathrm{Incremento} \ \mathrm{marginal} \ \mathrm{en} \ \sqrt{V_t} \quad [\%]$"
+  "inc_alpha_0" => L"$\mathrm{Base} \ \mathrm{increase} \ \mathrm{in} \ \sqrt{V_t} \quad [\%]$",
+  "inc_alpha_1" => L"$\mathrm{Marginal} \ \mathrm{increase} \ \mathrm{in} \ \sqrt{V_t} \quad [\%]$"
 )
 
 # ==========================================
 # 3. PLOTTING & SUMMARY FUNCTIONS
 # ==========================================
+# Defaults must be set before any plot object is built, since Plots.jl
+# resolves attributes at creation time.
 default(
   grid=false,
   dpi=200
@@ -107,6 +112,8 @@ function generate_centered_figure(sym_data_dict, symbols_list, param_list, latex
     show_legend = (p_idx == 1)
     display_name = get(latex_map, param, param)
 
+    # Densities are shown without a y-axis: only the shape and location of
+    # each marginal matter here, not the height
     p_dens = plot(title="",
       xlabel=display_name,
       yticks=false,
@@ -133,7 +140,9 @@ function generate_centered_figure(sym_data_dict, symbols_list, param_list, latex
     push!(plots_array, p_dens)
   end
 
-  emp = plot(framestyle=:none, grid=false, showaxis=false, ticks=false, legend=false)
+  # Blank panel used to pad the second row so its two plots sit centred
+  # beneath the three in the first row
+  spacer = plot(framestyle=:none, grid=false, showaxis=false, ticks=false, legend=false)
 
   custom_layout = @layout [
     a{0.333w} b{0.333w} c
@@ -142,7 +151,7 @@ function generate_centered_figure(sym_data_dict, symbols_list, param_list, latex
 
   final_plots = [
     plots_array[1], plots_array[2], plots_array[3],
-    emp, plots_array[4], plots_array[5], emp
+    spacer, plots_array[4], plots_array[5], spacer
   ]
 
   final_plot = plot(final_plots..., layout=custom_layout, size=(1200, 500))
@@ -200,3 +209,8 @@ print_summary_table(symbols_data, symbols, cont_params, "CONTINUOUS PARAMETERS")
 # Jump Parameters
 generate_centered_figure(symbols_data, symbols, jump_params, latex_names, "../figs/posterior_jumps_all.pdf")
 print_summary_table(symbols_data, symbols, jump_params, "JUMP PARAMETERS")
+
+# scalefontsizes is cumulative within a session; reset so repeated runs in the
+# same REPL do not keep enlarging the fonts
+Plots.resetfontsizes()
+
