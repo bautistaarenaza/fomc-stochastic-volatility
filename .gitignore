@@ -11,6 +11,9 @@ data/*
 # PMCMC output
 mcmc_chains/
 
+# pit values
+pit_vals/
+
 # Julia
 *.jl.cov
 *.jl.mem
