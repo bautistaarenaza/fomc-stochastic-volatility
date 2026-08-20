@@ -19,15 +19,15 @@ discontinuity in both. Working with the log-price $y_t = \log S_t$ and the log-v
 $x_t = \log V_t$ — the latter guaranteeing $V_t > 0$ without constraints on $x_t$ — the
 system is
 
-$$dy_t = \left(\mu - \tfrac{1}{2}e^{x_t}\right)dt + e^{x_t/2}\,dW_t^S + Z_t^S\,dN_t$$
+$$dy_t = \left(\mu - \tfrac{1}{2}e^{x_t}\right)dt + e^{x_t/2} dW_t^S + Z_t^S dN_t$$
 
-$$dx_t = \kappa(\theta - x_t)\,dt + \sigma_v\,dW_t^V + Z_t^V\,dN_t$$
+$$dx_t = \kappa(\theta - x_t) dt + \sigma_v dW_t^V + Z_t^V dN_t$$
 
 where $-\tfrac{1}{2}e^{x_t}$ is the Itô correction, which keeps the expected rate of return on
 $S_t$ equal to $\mu$ regardless of the volatility level. The two Wiener processes are
 correlated,
 
-$$\mathbb{E}\left[dW_t^S\,dW_t^V\right] = \rho\,dt,$$
+$$\mathbb{E}\left[dW_t^S dW_t^V\right] = \rho dt,$$
 
 with $\rho < 0$ capturing the leverage effect: sharp price falls tend to coincide with rises
 in volatility.
@@ -52,9 +52,9 @@ Data arrive at intervals of $\Delta t$, so an Euler–Maruyama scheme turns the 
 difference equations. With $\Delta y_t = y_t - y_{t-1}$ the observed log return over the
 $t$-th window and $I_t \in \{0,1\}$ indicating an FOMC announcement in that window:
 
-$$\Delta y_t = \left(\mu - \tfrac{1}{2}e^{x_{t-1}}\right)\Delta t + e^{x_{t-1}/2}\sqrt{\Delta t}\,\varepsilon_t^S + Z_t^S I_t$$
+$$\Delta y_t = \left(\mu - \tfrac{1}{2}e^{x_{t-1}}\right)\Delta t + e^{x_{t-1}/2}\sqrt{\Delta t} \varepsilon_t^S + Z_t^S I_t$$
 
-$$x_t = x_{t-1} + \kappa(\theta - x_{t-1})\Delta t + \sigma_v\sqrt{\Delta t}\,\varepsilon_t^V + Z_t^V I_t$$
+$$x_t = x_{t-1} + \kappa(\theta - x_{t-1})\Delta t + \sigma_v\sqrt{\Delta t} \varepsilon_t^V + Z_t^V I_t$$
 
 where $\varepsilon_t = (\varepsilon_t^S, \varepsilon_t^V)^\top \sim \mathcal{N}(0, \Sigma)$ with
 
@@ -62,7 +62,7 @@ $$\Sigma = \begin{pmatrix} 1 & \rho \\\\ \rho & 1 \end{pmatrix}.$$
 
 Because $\Delta y_t$ is observed, the particle filter recovers the realized $\varepsilon_t^S$
 and draws the volatility innovation from its conditional law
-$\varepsilon_t^V \mid \varepsilon_t^S \sim \mathcal{N}(\rho\,\varepsilon_t^S,\, 1 - \rho^2)$,
+$\varepsilon_t^V \mid \varepsilon_t^S \sim \mathcal{N}(\rho \varepsilon_t^S, 1 - \rho^2)$,
 so simulated trajectories reproduce the leverage effect rather than ignoring it.
 
 Ten parameters in total:
@@ -71,7 +71,7 @@ $\Theta = \{\mu, \kappa, \theta, \sigma_v, \rho, \beta_0, \beta_1, \sigma_\epsil
 > **Units note.** Returns are scaled to percentage points ($\Delta y_t = 100 \times$ log
 > return) and $\Delta t$ is expressed in years, so $V_t$ carries units of
 > $(\mathrm{p.p.})^2/\mathrm{yr}$. The Itô correction therefore appears in the code as
-> `0.5 * (V / 100.0)`: under the rescaling $y = 100\,r$, the term $100 \cdot \tfrac{1}{2}V_{\text{raw}}$
+> `0.5 * (V / 100.0)`: under the rescaling $y = 100 r$, the term $100 \cdot \tfrac{1}{2}V_{\text{raw}}$
 > becomes $\tfrac{1}{2}V/100$.
 
 ## Data
@@ -96,20 +96,20 @@ retained. Each announcement is matched to the 30-minute bar containing it.
 ```
 fomc-stochastic-volatility/
 ├── code/
-│   ├── MacroFinanceModel.jl          # Module: particle filter with leverage and jumps
-│   ├── gen_data_30m.jl               # Build the 30-minute dataset
-│   ├── run_pmcmc.jl                  # PMMH sampler
-│   ├── rank_norm_gelman_rubin.jl     # Convergence diagnostics
-│   ├── compute_pit_vals.jl           # Probability integral transforms
-│   ├── test_pit_vals.jl              # Uniformity and independence tests
-│   ├── plot_marginal_densities.jl    # Posterior marginals and summary tables
-│   └── plot_stylized_jump.jl         # FOMC-window returns vs. predictive band
+│ ├── MacroFinanceModel.jl # Module: particle filter with leverage and jumps
+│ ├── gen_data_30m.jl # Build the 30-minute dataset
+│ ├── run_pmcmc.jl # PMMH sampler
+│ ├── rank_norm_gelman_rubin.jl # Convergence diagnostics
+│ ├── compute_pit_vals.jl # Probability integral transforms
+│ ├── test_pit_vals.jl # Uniformity and independence tests
+│ ├── plot_marginal_densities.jl # Posterior marginals and summary tables
+│ └── plot_stylized_jump.jl # FOMC-window returns vs. predictive band
 ├── data/
-│   ├── fomc_surprises_jk.csv         # JK surprise series (input)
-│   └── SPY/  IWM/  SHY/              # Raw and processed price data (generated)
-├── mcmc_chains/                      # Posterior draws (generated)
-├── pit_vals/                         # PIT sequences (generated)
-├── figs/                             # Figures (generated)
+│ ├── fomc_surprises_jk.csv # JK surprise series (input)
+│ └── SPY/ IWM/ SHY/ # Raw and processed price data (generated)
+├── mcmc_chains/ # Posterior draws (generated)
+├── pit_vals/ # PIT sequences (generated)
+├── figs/ # Figures (generated)
 ├── Project.toml
 └── Manifest.toml
 ```
@@ -208,12 +208,12 @@ posterior predictive band.
 ## Notes
 
 - The particle filter is multi-threaded. Start Julia with `julia -t auto` (or set
-  `JULIA_NUM_THREADS`) or the sampler will run single-threaded and be considerably slower.
+ `JULIA_NUM_THREADS`) or the sampler will run single-threaded and be considerably slower.
 - Estimation is the expensive step: 9,000 PMMH iterations at 2¹⁴ particles over a decade of
-  30-minute bars takes hours. Checkpoints are written every 250 iterations and removed on
-  successful completion.
+ 30-minute bars takes hours. Checkpoints are written every 250 iterations and removed on
+ successful completion.
 - Generated data, chains, and PIT files are excluded from version control; everything under
-  `data/<SYMBOL>/`, `mcmc_chains/`, and `pit_vals/` is reproducible from the scripts.
+ `data/<SYMBOL>/`, `mcmc_chains/`, and `pit_vals/` is reproducible from the scripts.
 
 ## References
 
