@@ -13,19 +13,66 @@ increment on the realized return innovation.
 
 ## The model
 
-Returns over a 30-minute window carry a diffusive component and, on FOMC announcement
-bars, an additional jump:
+The price $S_t$ and its latent variance $V_t$ evolve continuously between announcements. At
+the instant of an FOMC release ($t = \tau$) a counting process $N_t$ fires, inducing a
+discontinuity in both. Working with the log-price $y_t = \log S_t$ and the log-variance
+$x_t = \log V_t$ — the latter guaranteeing $V_t > 0$ without constraints on $x_t$ — the
+system is
 
-- **Log-variance** $x_t = \log V_t$ follows a discretized Ornstein–Uhlenbeck process with
-  mean-reversion speed $\kappa$, long-run level $\theta$, and volatility-of-volatility $\sigma_v$.
-- **Leverage** is governed by $\rho$, the correlation between the return and volatility
-  innovations.
-- **Return jumps** at FOMC announcements are linear in the monetary surprise,
-  $\beta_0 + \beta_1 \Delta i_\tau$, with idiosyncratic dispersion $\sigma_\epsilon$.
-- **Volatility jumps** at FOMC announcements are linear in the absolute surprise,
-  $\alpha_0 + \alpha_1 |\Delta i_\tau|$, so both easing and tightening surprises raise volatility.
+$$dy_t = \left(\mu - \tfrac{1}{2}e^{x_t}\right)dt + e^{x_t/2}\,dW_t^S + Z_t^S\,dN_t$$
 
-Ten parameters in total: $\kappa, \theta, \sigma_v, \mu, \alpha_0, \alpha_1, \beta_0, \beta_1, \sigma_\epsilon, \rho$.
+$$dx_t = \kappa(\theta - x_t)\,dt + \sigma_v\,dW_t^V + Z_t^V\,dN_t$$
+
+where $-\tfrac{1}{2}e^{x_t}$ is the Itô correction, which keeps the expected rate of return on
+$S_t$ equal to $\mu$ regardless of the volatility level. The two Wiener processes are
+correlated,
+
+$$\mathbb{E}\left[dW_t^S\,dW_t^V\right] = \rho\,dt,$$
+
+with $\rho < 0$ capturing the leverage effect: sharp price falls tend to coincide with rises
+in volatility.
+
+Rather than treating the jump sizes as latent random variables, both are tied to an
+observable monetary surprise $\Delta i_\tau$:
+
+$$Z_\tau^S = \beta_0 + \beta_1 \Delta i_\tau + \epsilon_\tau, \qquad \epsilon_\tau \sim \mathcal{N}(0, \sigma_\epsilon^2)$$
+
+$$Z_\tau^V = \alpha_0 + \alpha_1 |\Delta i_\tau|$$
+
+The intercepts $\beta_0$ and $\alpha_0$ are the **pure-event** component: the impact of the
+release itself, present even when the decision is fully anticipated ($\Delta i_\tau = 0$). The
+slopes $\beta_1$ and $\alpha_1$ are the **magnitude-sensitive** component. The volatility jump
+depends on $|\Delta i_\tau|$, so surprises in either direction raise volatility. No noise term
+enters $Z_\tau^V$: since the variance is itself latent, an additional shock there would be
+statistically redundant with the increment of $W_t^V$.
+
+### Discretization
+
+Data arrive at intervals of $\Delta t$, so an Euler–Maruyama scheme turns the system into
+difference equations. With $\Delta y_t = y_t - y_{t-1}$ the observed log return over the
+$t$-th window and $I_t \in \{0,1\}$ indicating an FOMC announcement in that window:
+
+$$\Delta y_t = \left(\mu - \tfrac{1}{2}e^{x_{t-1}}\right)\Delta t + e^{x_{t-1}/2}\sqrt{\Delta t}\,\varepsilon_t^S + Z_t^S I_t$$
+
+$$x_t = x_{t-1} + \kappa(\theta - x_{t-1})\Delta t + \sigma_v\sqrt{\Delta t}\,\varepsilon_t^V + Z_t^V I_t$$
+
+where $\varepsilon_t = (\varepsilon_t^S, \varepsilon_t^V)^\top \sim \mathcal{N}(0, \Sigma)$ with
+
+$$\Sigma = \begin{pmatrix} 1 & \rho \\\\ \rho & 1 \end{pmatrix}.$$
+
+Because $\Delta y_t$ is observed, the particle filter recovers the realized $\varepsilon_t^S$
+and draws the volatility innovation from its conditional law
+$\varepsilon_t^V \mid \varepsilon_t^S \sim \mathcal{N}(\rho\,\varepsilon_t^S,\, 1 - \rho^2)$,
+so simulated trajectories reproduce the leverage effect rather than ignoring it.
+
+Ten parameters in total:
+$\Theta = \{\mu, \kappa, \theta, \sigma_v, \rho, \beta_0, \beta_1, \sigma_\epsilon, \alpha_0, \alpha_1\}$.
+
+> **Units note.** Returns are scaled to percentage points ($\Delta y_t = 100 \times$ log
+> return) and $\Delta t$ is expressed in years, so $V_t$ carries units of
+> $(\mathrm{p.p.})^2/\mathrm{yr}$. The Itô correction therefore appears in the code as
+> `0.5 * (V / 100.0)`: under the rescaling $y = 100\,r$, the term $100 \cdot \tfrac{1}{2}V_{\text{raw}}$
+> becomes $\tfrac{1}{2}V/100$.
 
 ## Data
 
