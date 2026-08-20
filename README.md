@@ -58,7 +58,7 @@ $$x_t = x_{t-1} + \kappa(\theta - x_{t-1})\Delta t + \sigma_v\sqrt{\Delta t} \va
 
 where $\varepsilon_t = (\varepsilon_t^S, \varepsilon_t^V)^\top \sim \mathcal{N}(0, \Sigma)$ with
 
-$$\Sigma = \begin{pmatrix} 1 & \rho \\ \rho & 1 \end{pmatrix}.$$
+$$\Sigma = \begin{pmatrix} 1 & \rho \\\\ \rho & 1 \end{pmatrix}.$$
 
 Because $\Delta y_t$ is observed, the particle filter recovers the realized $\varepsilon_t^S$
 and draws the volatility innovation from its conditional law
